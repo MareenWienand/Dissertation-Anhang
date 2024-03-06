@@ -1,0 +1,242 @@
+%clear
+
+load data: Participants Group A
+this function loads a whole directory of .nirs files. The second argument tells the function to use the first level of folder names to specify group id and to use the second for subject id.
+folder = ['C:\Users\Mareen\Universitaet Duisburg-Essen\Dissertation - Publikationen\Studien\Datenanalyse Matlab\fNIRSeLearning\GroupA'];
+raw1 = nirs.io.loadDirectory(folder, {'group','subject'});
+
+tbl1 = nirs.createStimulusTable(raw1);
+
+Edit stimulus duration
+%stim_dur = [3 3]; %array with duration of each condition
+%raw_edit = nirs.design.change_stimulus_duration(raw, [], stim_dur);
+j = nirs.modules.ChangeStimulusInfo();
+j.ChangeTable = tbl1;
+raw1 = j.run(raw1);
+
+preprocessing pipeline
+j = nirs.modules.FixNaNs();
+j = nirs.modules.FixSatChans(j);
+j = nirs.modules.RemoveStimless(j);
+
+% This module can be used to rename and/or merge stimulus conditions
+% together.
+j = nirs.modules.RenameStims(j);
+% This job contains a field called "listOfChanges"
+% which specifies the changes we are going to make to the stimulus names;
+j.listOfChanges = {
+    'stim_channel1', 'PDF';%'PDF zur Aufgabe: Lieferanten anlegen';
+    'stim_channel2', 'Video';%'Video zur Aufgabe: Kunden anlegen';
+    };
+
+raw1 = j.run(raw1);
+
+Same thing again for Group B
+folder = ['C:\Users\Mareen\Universitaet Duisburg-Essen\Dissertation - Publikationen\Studien\Datenanalyse Matlab\fNIRSeLearning\GroupB'];
+raw2 = nirs.io.loadDirectory(folder, {'group','subject'});
+
+tbl2 = nirs.createStimulusTable(raw2);
+
+Edit stimulus duration
+%stim_dur = [3 3]; %array with duration of each condition
+%raw_edit = nirs.design.change_stimulus_duration(raw, [], stim_dur);
+j = nirs.modules.ChangeStimulusInfo();
+j.ChangeTable = tbl2;
+raw2 = j.run(raw2);
+
+preprocessing pipeline
+j = nirs.modules.FixNaNs();
+j = nirs.modules.FixSatChans(j);
+j = nirs.modules.RemoveStimless(j);
+
+% This module can be used to rename and/or merge stimulus conditions
+% together.
+j = nirs.modules.RenameStims(j);
+% This job contains a field called "listOfChanges"
+% which specifies the changes we are going to make to the stimulus names;
+j.listOfChanges = {
+    'stim_channel1', 'Video';%'Video zur Aufgabe: Lieferanten anlegen';
+    'stim_channel2', 'PDF';%'PDF zur Aufgabe: Kunden anlegen';
+    };
+
+raw2 = j.run(raw2);
+
+raw = [raw1; raw2];
+
+Downsample the data to 4 Hz to address the high autocorrelation in the fNIRS signal
+For more information, see the following paper Huppert (2016) Commentary on the Statistical Properties of Noise.... (DOI: 10.1117/1.NPh.3.1.010401) Note: This step is not necessary if the sampling frequency of your data is below 4Hz to begin with
+j = nirs.modules.Resample( j );
+j.Fs = 4;
+
+j = nirs.modules.TrimBaseline( j );
+j.preBaseline  = 10;
+j.postBaseline = 1900;
+raw_edit = j.run(raw);
+
+Optical Density
+j = nirs.modules.OpticalDensity();
+OD = j.run(raw_edit);
+
+Short-channels correction
+Please see: Scholkmann F, Kleiser S, Metz AJ, et al (2014) A review on continuous wave functional near-infrared spectroscopy and imaging instrumentation and methodology.
+%Neuroimage 85:6?27. https://doi.org/10.1016/j.neuroimage.2013.05.004
+%AND: Saager RB, Berger AJ (2005) Direct characterization and removal of interfering absorption trends in two-layer turbid media. J Opt Soc Am A 22:1874. https://doi.org/10.1364/JOSAA.22.001874
+blen = 2; % baseline (pre onset)
+offset = 10; % offset (post duration)
+task = 0; % flag for separate blocks
+raw_edit2 = nirs.modules.ntbxSSR(OD, blen, offset, task);
+
+Before doing regression we must convert to optical density and then
+hemoglobin. The two modules must be done in order. Convert to hemoglobin.
+j = nirs.modules.BeerLambertLaw();
+j = nirs.modules.RemoveShortSeperations(j);
+hb = j.run(raw_edit2);
+
+subject level GLM
+This is the recommended first-level GLM module.
+j = nirs.modules.GLM(); % AR-IRLS
+
+% the default basis will be used if no other basis is specified
+j.basis('default') = nirs.design.basis.Canonical();
+SubjStats = j.run( hb );
+
+Group level
+This module computes group level statistics using a mixed effects model.
+j = nirs.modules.MixedEffects();
+% Run the group level. Takes a while...
+j.formula = 'beta ~ -1 + group:cond + (1|subject)';
+%j.include_diagnostics=true;  % This flag will cause the code to compute the
+% additional LME model info that we can use for diagntstics
+GroupStats = j.run(SubjStats);
+
+Block Average
+%j = nirs.modules.Run_HOMER2();
+%    j.fcn = 'hmrBlockAvg';
+%    tpre = -2;
+%    tpost = 700;
+%    j.vars.trange = [tpre tpost];
+
+%blk = j.run(hb);
+%blk.data;
+
+%blk.draw;
+
+% only works for one subject
+% chan = size(blk.data,2)./2;
+%cond1 = blk.data(:,:,1);
+
+%figure;
+%hbO_avg = mean([cond1(:,1), cond1(:,2)],2)
+%plot(hbO_avg);
+%hbR_avg = mean([cond1(:,1+chan), cond1(:,2+chan+1)])
+%plot(hbR_avg)
+
+%
+% chan_cond1 = []; % = Average of channel 1 for condition 1 for all subjects
+% for i = 1:11
+%     chan_cond1(:,i) = blk(i).data(:,2,1); %all rows, only hbR and only condition 1
+% end
+%
+% chan_cond2 = []; % = Average of channel 1 for condition 2 for all subjects
+% for i = 1:11
+%     chan_cond2(:,i) = blk(i).data(:,2,2); %all rows, only hbR and only condition 1
+% end
+%
+% figure; plot(mean(chan_cond1, 2));
+% hold on; plot(mean(chan_cond2, 2));
+
+%figure; plot(chan1_cond1(:,1));
+%hold on; plot(chan1_cond1(:,3));
+
+vizualization
+First let's add an anchor to attach the probe to the center of the forehead (FpZ)
+Name{1}='nas';
+xyz(1,:)=[0 190 0];
+Type{1}='FID-anchor';  % This is an anchor point
+Units{1}='mm';
+
+%Now let's add a few more
+Name{2}='FCz';
+xyz(2,:)=[0 -10 0];
+Type{2}='FID-attractor';  % This is an attractor
+Units{2}='mm';
+
+Name{3}='T7';
+xyz(3,:)=[-220 0 0];
+Type{3}='FID-attractor';  % This is an attractor
+Units{3}='mm';
+
+Name{4}='T8';
+xyz(4,:)=[220 0 0];
+Type{4}='FID-attractor';  % This is an attractor
+Units{4}='mm';
+
+% now we need to add these points to the optodes field in the probe.  This
+% is a table, so we need to create a matching format table with the
+% fiducials
+fid=table(Name',xyz(:,1),xyz(:,2),xyz(:,3),Type',Units',...
+    'VariableNames',{'Name','X','Y','Z','Type','Units'});
+
+GroupStats.probe.optodes=[GroupStats.probe.optodes; fid];
+
+% But, if you only have 1 or 2 of the 3, it will try to keep the ratios the
+% same and rescale
+% headsize=Dictionary();
+% headsize('circumference')=56;
+GroupStats.probe=nirs.util.registerprobe1020(GroupStats.probe);
+
+% This is a NIRSFAST BEM model class object from the Colin27 head
+%fwdBEM.draw;
+lambda=unique(GroupStats.probe.link.type);
+lambda = [760; 850]; % use this instead of the result from above: {'hbo', 'hbr'}
+fwdBEM=nirs.registration.Colin27.BEM(lambda);
+
+% by default, the mesh will draw the fiducial points when plotting.  This
+% is controlled in the mesh(1).fiducials field.  To turn off all of the
+% 10-20 labels
+fwdBEM.mesh(1).fiducials.Draw(:)=false;
+% the mesh is also nested (4-layers), so let's turn off the display of the
+% skin, skull, and dura
+fwdBEM.mesh(1).transparency=0;
+fwdBEM.mesh(2).transparency=0;
+fwdBEM.mesh(3).transparency=1;
+
+GroupStats.probe=GroupStats.probe.register_mesh2probe(fwdBEM.mesh);
+GroupStats.probe.defaultdrawfcn='3D mesh';
+
+GroupStats.probe.draw;
+
+% Figures
+GroupStats.draw('tstat', [-5 5], 'q < 0.05')
+close all;
+folder2 =['C:\Users\Mareen\Universitaet Duisburg-Essen\Dissertation - Publikationen\Studien\Datenanalyse Matlab' filesep 'Results-elearn'];
+GroupStats.printAll('tstat', [-5 5], 'q < 0.05', folder2, 'jpeg')
+
+% You can also display a table of all stats
+disp(GroupStats.table());
+ResultsTable = GroupStats.table();
+GroupResultsME = [folder2 '.txt'];
+writetable(ResultsTable, GroupResultsME);
+
+Contrasts
+ONLY the Macroconditions now:
+c3 = [1 -1]; %PDF > Video
+
+GroupStats.probe.defaultdrawfcn = '3D mesh';
+
+%Contrasts with uncorrected p-value with Mixed-Effects-Model
+ContrastStats = GroupStats.ttest(c3);
+ContrastStats.draw('tstat', [-5 5], 'p < 0.05');
+folder2 =[pwd filesep 'Figures-Contrasts-FDR'];
+ContrastStats.printAll('tstat', [-5 5], 'q < 0.01', folder2, 'png');
+close all;
+ContrastTable = ContrastStats.table();
+folder3 =['C:\Users\Mareen\Universitaet Duisburg-Essen\Dissertation - Publikationen\Studien\Datenanalyse Matlab' filesep 'Contrasts-Macroconditions_pvalueadapted'];
+ContrastResults = [folder3 '.txt'];
+writetable(ContrastTable, ContrastResults);
+
+Test multiple ROIs analysis with focus on the DmPFC channels
+source = [4 4, 5 5, 4 6 7, 5 7 8]'; detector = [1 4, 2 4, 6 6 6, 7 7 7]'; % names=['r_dmPFC','l_dmPFC','r_vmPFC','l_vmPFC']'; ROI=table(source,detector);
+R1 = nirs.util.roiAverage(ContrastStats,ROI(1:2,:),'r_dmPFC'); R2 = nirs.util.roiAverage(ContrastStats,ROI(3:4,:),'l_dmPFC'); R3 = nirs.util.roiAverage(ContrastStats,ROI(5:7,:),'r_vmPFC'); R4 = nirs.util.roiAverage(ContrastStats,ROI(8:10,:),'l_vmPFC');
+result_ROIs=vertcat(R1, R2, R3, R4);
+writetable(result_ROIs, ['C:\Users\Mareen\Universitaet Duisburg-Essen\Dissertation - Publikationen\Studien\Datenanalyse Matlab' filesep 'Result_ROIs_Table.txt']);
